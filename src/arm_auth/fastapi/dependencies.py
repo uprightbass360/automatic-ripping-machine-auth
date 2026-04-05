@@ -10,32 +10,26 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from fastapi import Depends, HTTPException, Request
-from sqlalchemy.orm import make_transient
 
 from arm_auth.db import AuthDB
 from arm_auth.models import User
+from arm_auth.service import AuthService, GroupInfo, UserInfo
 
 logger = logging.getLogger(__name__)
 
 
-def _detach_user(session, user: User) -> User:
-    """Eagerly load groups and detach user from session."""
-    _ = [(g.id, g.name, g.scopes) for g in user.groups]
-    session.expunge(user)
-    for g in user.groups:
-        session.expunge(g)
-    make_transient(user)
-    return user
-
-
 @dataclass
 class SyntheticUser:
-    """Fake user returned when auth is disabled."""
+    """Fake user returned when auth is disabled.
+
+    Mirrors the UserInfo interface so callers can treat both uniformly.
+    """
     id: int = 0
     username: str = "anonymous"
     email: Optional[str] = None
+    password_hash: str = ""
     active: bool = True
-    groups: list = field(default_factory=list)
+    groups: list[GroupInfo] = field(default_factory=list)
 
     @property
     def all_scopes(self) -> set[str]:
@@ -70,7 +64,7 @@ class AuthDependencies:
                 user = s.query(User).filter_by(username=remote_user, active=True).first()
                 if user is None:
                     raise HTTPException(status_code=401, detail="User not found or inactive")
-                return _detach_user(s, user)
+                return AuthService._to_info(user)
 
         return Depends(_get_current_user)
 
@@ -91,12 +85,10 @@ class AuthDependencies:
                 user = s.query(User).filter_by(username=remote_user, active=True).first()
                 if user is None:
                     raise HTTPException(status_code=401, detail="User not found or inactive")
-                _ = [(g.name, g.scopes) for g in user.groups]
-                has_scope = user.has_scope(scope)
-                _detach_user(s, user)
-                if not has_scope:
+                info = AuthService._to_info(user)
+                if not info.has_scope(scope):
                     raise HTTPException(status_code=403, detail=f"Insufficient permissions: requires '{scope}'")
-                return user
+                return info
 
         return Depends(_require_scope)
 

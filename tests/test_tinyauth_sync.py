@@ -84,6 +84,7 @@ class TestGenerateUsersFile:
         usernames = {line.split(":")[0] for line in lines}
         assert usernames == {"user.name", "user@domain"}
         for line in lines:
-            parts = line.split(":")
-            assert len(parts) >= 2
+            # bcrypt hashes contain $, so split on first : only
+            parts = line.split(":", 1)
+            assert len(parts) == 2
             assert parts[1].startswith("$2b$")

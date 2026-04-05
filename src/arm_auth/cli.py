@@ -59,6 +59,7 @@ def init(db_path: str, admin_password: str, users_file: str):
 def add_user(db_path: str, username: str, password: str, group: str, users_file: str):
     """Add a user to the auth database."""
     db = _get_db(db_path)
+    db.create_all()  # ensure tables exist
     svc = AuthService(db)
 
     try:

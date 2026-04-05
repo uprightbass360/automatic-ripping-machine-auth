@@ -32,10 +32,16 @@ def sync_users(db: AuthDB, users_file_path: str):
     """Write the Tinyauth users file to disk.
 
     Creates parent directories if they don't exist.
-    Overwrites any existing file.
+    Uses atomic write (temp file + rename) to avoid partial writes.
     """
     content = generate_users_file(db)
     path = Path(users_file_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
-    logger.info("Synced %d users to %s", content.count("\n"), users_file_path)
+
+    # Atomic write: write to temp file, then rename
+    tmp_path = path.with_suffix(".tmp")
+    tmp_path.write_text(content, encoding="utf-8")
+    tmp_path.replace(path)
+
+    user_count = len([l for l in content.strip().split("\n") if l and not l.startswith("#")])
+    logger.info("Synced %d users to %s", user_count, users_file_path)

@@ -1,8 +1,10 @@
 """Tests for auth service CRUD operations."""
 
+import json
+
 import pytest
 
-from arm_auth.service import AuthService
+from arm_auth.service import AuthService, UserInfo, GroupInfo
 from arm_auth.models import User, Group
 from arm_auth.scopes import DEFAULT_GROUPS
 
@@ -143,3 +145,145 @@ class TestUserCRUD:
         user = self.svc.create_user("admin", "secret")
         self.svc.update_user(user.id, active=False)
         assert self.svc.verify_credentials("admin", "secret") is None
+
+
+class TestInputValidation:
+    @pytest.fixture(autouse=True)
+    def setup(self, auth_db):
+        self.db = auth_db
+        self.svc = AuthService(auth_db)
+        self.svc.seed_defaults()
+
+    def test_create_user_empty_username(self):
+        with pytest.raises(ValueError, match="cannot be empty"):
+            self.svc.create_user("", "password")
+
+    def test_create_user_whitespace_only_username(self):
+        with pytest.raises(ValueError, match="cannot be empty"):
+            self.svc.create_user("   ", "password")
+
+    def test_create_user_username_with_colon(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            self.svc.create_user("user:name", "password")
+
+    def test_create_user_username_with_newline(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            self.svc.create_user("user\nname", "password")
+
+    def test_create_user_username_with_null(self):
+        with pytest.raises(ValueError, match="invalid characters"):
+            self.svc.create_user("user\x00name", "password")
+
+    def test_create_user_empty_password(self):
+        with pytest.raises(ValueError, match="Password cannot be empty"):
+            self.svc.create_user("validuser", "")
+
+    def test_create_user_long_password(self):
+        long_pw = "a" * 73  # >72 bytes
+        with pytest.raises(ValueError, match="too long"):
+            self.svc.create_user("validuser", long_pw)
+
+    def test_create_user_username_too_long(self):
+        with pytest.raises(ValueError, match="too long"):
+            self.svc.create_user("a" * 151, "password")
+
+
+class TestUserInfoDataclass:
+    @pytest.fixture(autouse=True)
+    def setup(self, auth_db):
+        self.db = auth_db
+        self.svc = AuthService(auth_db)
+        self.svc.seed_defaults()
+
+    def test_list_users_shared_group(self):
+        """Two users in the same group should not crash list_users."""
+        self.svc.create_user("alice", "pw1", group_name="user")
+        self.svc.create_user("bob", "pw2", group_name="user")
+        users = self.svc.list_users()
+        assert len(users) == 2
+        names = {u.username for u in users}
+        assert names == {"alice", "bob"}
+        # Both should have group info
+        for u in users:
+            assert len(u.groups) == 1
+            assert u.groups[0].name == "user"
+
+    def test_detached_user_has_scope(self):
+        """UserInfo returned by service should support has_scope."""
+        user = self.svc.create_user("admin", "pw", group_name="admin")
+        assert isinstance(user, UserInfo)
+        assert user.has_scope("users:manage") is True
+        assert user.has_scope("anything") is True  # admin has wildcard
+
+    def test_detached_user_has_scope_limited(self):
+        """Non-admin UserInfo should not have admin scopes."""
+        user = self.svc.create_user("viewer", "pw", group_name="user")
+        assert isinstance(user, UserInfo)
+        assert user.has_scope("jobs:read") is True
+        assert user.has_scope("users:manage") is False
+
+    def test_scope_list_corrupted_json(self):
+        """Group with invalid JSON scopes should return empty list."""
+        with self.db.session() as s:
+            group = Group(name="broken", scopes="not valid json")
+            s.add(group)
+            s.flush()
+            assert group.scope_list == []
+
+
+class TestCLIFreshDB:
+    def test_add_user_cli_fresh_db(self, tmp_path):
+        """add-user on a path with no existing DB should work (create_all)."""
+        from click.testing import CliRunner
+        from arm_auth.cli import main
+
+        db_path = str(tmp_path / "fresh.db")
+        users_file = str(tmp_path / "users.txt")
+
+        runner = CliRunner()
+        # First init to seed groups
+        result = runner.invoke(main, [
+            "init", "--db-path", db_path,
+            "--admin-password", "secret", "--users-file", users_file,
+        ])
+        assert result.exit_code == 0
+
+        # Remove the DB to simulate fresh state
+        import os
+        os.unlink(db_path)
+
+        # add-user on fresh DB should call create_all and then fail
+        # because no groups exist (tables created but not seeded)
+        result = runner.invoke(main, [
+            "add-user", "--db-path", db_path,
+            "--username", "newuser", "--password", "pw",
+            "--users-file", users_file,
+        ])
+        # Should fail because groups don't exist yet (no seed_defaults)
+        assert result.exit_code != 0
+        assert "does not exist" in result.output
+
+    def test_add_user_cli_fresh_db_after_init(self, tmp_path):
+        """add-user after init should work on a fresh DB path."""
+        from click.testing import CliRunner
+        from arm_auth.cli import main
+
+        db_path = str(tmp_path / "new.db")
+        users_file = str(tmp_path / "users.txt")
+
+        runner = CliRunner()
+        # Init creates tables + seeds groups + creates admin
+        result = runner.invoke(main, [
+            "init", "--db-path", db_path,
+            "--admin-password", "secret", "--users-file", users_file,
+        ])
+        assert result.exit_code == 0
+
+        # Now add-user should work
+        result = runner.invoke(main, [
+            "add-user", "--db-path", db_path,
+            "--username", "viewer", "--password", "pw",
+            "--users-file", users_file,
+        ])
+        assert result.exit_code == 0
+        assert "Created user" in result.output

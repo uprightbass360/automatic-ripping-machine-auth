@@ -2,9 +2,8 @@
 
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import Optional
-
-from sqlalchemy.orm import make_transient
 
 from arm_auth.db import AuthDB
 from arm_auth.models import User, Group
@@ -14,7 +13,37 @@ from arm_auth.scopes import DEFAULT_GROUPS
 logger = logging.getLogger(__name__)
 
 # Pre-computed dummy hash for constant-time username enumeration prevention
-_DUMMY_HASH = "$2b$12$LJ3m4ys3Lf0j5UJB.WhO0OTpcjzOmRKHSO1x2VgNJHbWMiGMgwKy"
+_DUMMY_HASH = hash_password("arm-auth-dummy-init")
+
+
+@dataclass
+class GroupInfo:
+    """Plain data copy of a Group, safe to use outside a DB session."""
+    id: int
+    name: str
+    scopes: list[str]
+
+
+@dataclass
+class UserInfo:
+    """Plain data copy of a User, safe to use outside a DB session."""
+    id: int
+    username: str
+    email: str | None
+    password_hash: str
+    active: bool
+    groups: list[GroupInfo] = field(default_factory=list)
+
+    @property
+    def all_scopes(self) -> set[str]:
+        scopes = set()
+        for g in self.groups:
+            scopes.update(g.scopes)
+        return scopes
+
+    def has_scope(self, scope: str) -> bool:
+        all_scopes = self.all_scopes
+        return "*" in all_scopes or scope in all_scopes
 
 
 class AuthService:
@@ -23,14 +52,20 @@ class AuthService:
     def __init__(self, db: AuthDB):
         self.db = db
 
-    def _detach_user(self, session, user: User) -> User:
-        """Eagerly load groups and detach user from session."""
-        _ = [(g.id, g.name, g.scopes) for g in user.groups]
-        session.expunge(user)
-        for g in user.groups:
-            session.expunge(g)
-        make_transient(user)
-        return user
+    @staticmethod
+    def _to_info(user: User) -> UserInfo:
+        """Copy user and groups into plain dataclasses (session-safe)."""
+        return UserInfo(
+            id=user.id,
+            username=user.username,
+            email=user.email,
+            password_hash=user.password_hash,
+            active=user.active,
+            groups=[
+                GroupInfo(id=g.id, name=g.name, scopes=g.scope_list)
+                for g in user.groups
+            ],
+        )
 
     def seed_defaults(self):
         """Create default groups if they don't exist."""
@@ -48,8 +83,23 @@ class AuthService:
         password: str,
         email: Optional[str] = None,
         group_name: str = "user",
-    ) -> User:
+    ) -> UserInfo:
         """Create a new user with a hashed password and group assignment."""
+        # Validate username
+        username = username.strip()
+        if not username:
+            raise ValueError("Username cannot be empty")
+        if len(username) > 150:
+            raise ValueError("Username too long (max 150 characters)")
+        if ":" in username or "\n" in username or "\x00" in username:
+            raise ValueError("Username contains invalid characters (: newline or null)")
+
+        # Validate password
+        if not password:
+            raise ValueError("Password cannot be empty")
+        if len(password.encode("utf-8")) > 72:
+            raise ValueError("Password too long (max 72 bytes — bcrypt limitation)")
+
         with self.db.session() as s:
             existing = s.query(User).filter_by(username=username).first()
             if existing is not None:
@@ -67,25 +117,22 @@ class AuthService:
             user.groups.append(group)
             s.add(user)
             s.flush()
-            # Force-load all attributes and relationships before session closes
             s.refresh(user)
-            return self._detach_user(s, user)
+            return self._to_info(user)
 
-    def list_users(self) -> list[User]:
+    def list_users(self) -> list[UserInfo]:
         """Return all users with their groups loaded."""
         with self.db.session() as s:
             users = s.query(User).all()
-            for u in users:
-                self._detach_user(s, u)
-            return users
+            return [self._to_info(u) for u in users]
 
-    def get_user(self, username: str) -> Optional[User]:
+    def get_user(self, username: str) -> Optional[UserInfo]:
         """Look up a user by username."""
         with self.db.session() as s:
             user = s.query(User).filter_by(username=username).first()
-            if user is not None:
-                self._detach_user(s, user)
-            return user
+            if user is None:
+                return None
+            return self._to_info(user)
 
     def update_user(
         self,
@@ -93,7 +140,7 @@ class AuthService:
         email: Optional[str] = None,
         group_name: Optional[str] = None,
         active: Optional[bool] = None,
-    ) -> User:
+    ) -> UserInfo:
         """Update a user's email, group, or active status."""
         with self.db.session() as s:
             user = s.get(User, user_id)
@@ -111,7 +158,7 @@ class AuthService:
                 user.groups.append(group)
             s.flush()
             s.refresh(user)
-            return self._detach_user(s, user)
+            return self._to_info(user)
 
     def update_password(self, user_id: int, new_password: str):
         """Change a user's password."""
@@ -135,7 +182,7 @@ class AuthService:
 
             s.delete(user)
 
-    def verify_credentials(self, username: str, password: str) -> Optional[User]:
+    def verify_credentials(self, username: str, password: str) -> Optional[UserInfo]:
         """Verify username + password. Returns user if valid, None otherwise."""
         with self.db.session() as s:
             user = s.query(User).filter_by(username=username, active=True).first()
@@ -144,4 +191,4 @@ class AuthService:
                 return None
             if not verify_password(password, user.password_hash):
                 return None
-            return self._detach_user(s, user)
+            return self._to_info(user)
