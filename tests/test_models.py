@@ -67,6 +67,27 @@ class TestGroupModel:
             assert group.scope_list == ["*"]
 
 
+class TestScopeListSetter:
+    def test_scope_list_setter(self, auth_db):
+        with auth_db.session() as s:
+            group = Group(name="custom", scopes='[]')
+            s.add(group)
+            s.flush()
+            group.scope_list = ["a", "b"]
+            s.flush()
+            assert group.scopes == '["a", "b"]'
+
+
+class TestUserNoGroups:
+    def test_user_no_groups_empty_scopes(self, auth_db):
+        with auth_db.session() as s:
+            user = User(username="lonely", password_hash="hash")
+            s.add(user)
+            s.flush()
+            assert user.all_scopes == set()
+            assert user.has_scope("x") is False
+
+
 class TestUserGroupRelationship:
     def test_assign_user_to_group(self, auth_db):
         with auth_db.session() as s:

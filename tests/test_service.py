@@ -109,6 +109,36 @@ class TestUserCRUD:
     def test_verify_credentials_unknown_user(self):
         assert self.svc.verify_credentials("ghost", "pw") is None
 
+    def test_create_user_nonexistent_group(self):
+        with pytest.raises(ValueError, match="does not exist"):
+            self.svc.create_user("x", "pw", group_name="nonexistent")
+
+    def test_update_user_nonexistent_id(self):
+        with pytest.raises(ValueError):
+            self.svc.update_user(9999, email="x")
+
+    def test_update_password_nonexistent_id(self):
+        with pytest.raises(ValueError):
+            self.svc.update_password(9999, "pw")
+
+    def test_delete_user_nonexistent_id(self):
+        with pytest.raises(ValueError):
+            self.svc.delete_user(9999)
+
+    def test_delete_non_admin_with_admins_existing(self):
+        self.svc.create_user("admin", "pw", group_name="admin")
+        regular = self.svc.create_user("regular", "pw", group_name="user")
+        self.svc.delete_user(regular.id)
+        assert self.svc.get_user("regular") is None
+        assert self.svc.get_user("admin") is not None
+
+    def test_delete_one_of_two_admins(self):
+        admin1 = self.svc.create_user("admin1", "pw", group_name="admin")
+        self.svc.create_user("admin2", "pw", group_name="admin")
+        self.svc.delete_user(admin1.id)
+        assert self.svc.get_user("admin1") is None
+        assert self.svc.get_user("admin2") is not None
+
     def test_verify_credentials_inactive_user(self):
         user = self.svc.create_user("admin", "secret")
         self.svc.update_user(user.id, active=False)

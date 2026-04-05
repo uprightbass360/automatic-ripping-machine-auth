@@ -117,3 +117,29 @@ class TestAuthEnabled:
         client = TestClient(app)
         resp = client.get("/test", headers={"Remote-User": "viewer"})
         assert resp.status_code == 401
+
+    def test_require_scope_no_header_returns_401(self):
+        app = FastAPI()
+
+        @app.get("/admin")
+        async def endpoint(user=self.deps.require_scope("users:manage")):
+            return {"ok": True}
+
+        client = TestClient(app)
+        resp = client.get("/admin")
+        assert resp.status_code == 401
+
+    def test_require_scope_inactive_user_returns_401(self):
+        svc = AuthService(self.db)
+        user = svc.get_user("viewer")
+        svc.update_user(user.id, active=False)
+
+        app = FastAPI()
+
+        @app.get("/admin")
+        async def endpoint(user=self.deps.require_scope("users:manage")):
+            return {"ok": True}
+
+        client = TestClient(app)
+        resp = client.get("/admin", headers={"Remote-User": "viewer"})
+        assert resp.status_code == 401

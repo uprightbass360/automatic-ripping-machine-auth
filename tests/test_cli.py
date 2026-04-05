@@ -88,3 +88,22 @@ class TestAddUserCommand:
 
         assert result.exit_code != 0
         assert "already exists" in result.output
+
+    def test_add_user_nonexistent_group(self, tmp_path):
+        db_path = str(tmp_path / "auth.db")
+        users_file = str(tmp_path / "users.txt")
+
+        runner = CliRunner()
+        runner.invoke(main, [
+            "init", "--db-path", db_path,
+            "--admin-password", "secret", "--users-file", users_file,
+        ])
+        result = runner.invoke(main, [
+            "add-user", "--db-path", db_path,
+            "--username", "newuser", "--password", "pw",
+            "--group", "nonexistent",
+            "--users-file", users_file,
+        ])
+
+        assert result.exit_code != 0
+        assert "does not exist" in result.output

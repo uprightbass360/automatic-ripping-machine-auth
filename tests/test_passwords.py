@@ -29,3 +29,9 @@ class TestPasswordHashing:
     def test_hash_unicode_password(self):
         hashed = hash_password("p\u00e4ssw\u00f6rd")
         assert verify_password("p\u00e4ssw\u00f6rd", hashed) is True
+
+    def test_hash_empty_password(self):
+        hashed = hash_password("")
+        assert hashed.startswith("$2b$")
+        assert len(hashed) == 60
+        assert verify_password("", hashed) is True

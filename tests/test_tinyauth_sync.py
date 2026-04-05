@@ -72,3 +72,18 @@ class TestGenerateUsersFile:
         sync_users(self.db, str(filepath))
 
         assert filepath.exists()
+
+    def test_username_with_special_characters(self):
+        self.svc.create_user("user.name", "pw1")
+        self.svc.create_user("user@domain", "pw2")
+
+        content = generate_users_file(self.db)
+        lines = content.strip().split("\n")
+
+        assert len(lines) == 2
+        usernames = {line.split(":")[0] for line in lines}
+        assert usernames == {"user.name", "user@domain"}
+        for line in lines:
+            parts = line.split(":")
+            assert len(parts) >= 2
+            assert parts[1].startswith("$2b$")

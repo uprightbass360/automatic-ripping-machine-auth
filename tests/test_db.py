@@ -57,3 +57,17 @@ class TestAuthDB:
             with db.session():
                 pass
 
+    def test_session_rollback_on_exception(self, auth_db):
+        """An exception inside a session block should roll back changes."""
+        from arm_auth.models import Group
+
+        with pytest.raises(RuntimeError):
+            with auth_db.session() as s:
+                s.add(Group(name="doomed", scopes='["*"]'))
+                s.flush()
+                raise RuntimeError("simulated failure")
+
+        with auth_db.session() as s:
+            count = s.query(Group).filter_by(name="doomed").count()
+            assert count == 0
+
