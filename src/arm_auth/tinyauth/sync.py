@@ -25,7 +25,7 @@ def generate_users_file(db: AuthDB) -> str:
         for user in users:
             lines.append(f"{user.username}:{user.password_hash}")
 
-    return "\n".join(lines) + "\n" if lines else ""
+    return "\n".join(lines) + "\n" if lines else "# no active users\n"
 
 
 def sync_users(db: AuthDB, users_file_path: str):

@@ -42,7 +42,7 @@ class TestGenerateUsersFile:
 
     def test_empty_when_no_users(self):
         content = generate_users_file(self.db)
-        assert content.strip() == ""
+        assert content == "# no active users\n"
 
     def test_sync_writes_file(self, tmp_path):
         self.svc.create_user("admin", "secret")

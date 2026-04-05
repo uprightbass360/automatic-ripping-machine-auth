@@ -73,7 +73,10 @@ class Group(Base):
     @property
     def scope_list(self) -> list[str]:
         """Parse the JSON scopes string into a list."""
-        return json.loads(self.scopes)
+        try:
+            return json.loads(self.scopes)
+        except (json.JSONDecodeError, TypeError):
+            return []
 
     @scope_list.setter
     def scope_list(self, value: list[str]):

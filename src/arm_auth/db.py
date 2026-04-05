@@ -6,7 +6,7 @@ Follows the same singleton pattern as ARM-neu's arm.database module.
 import logging
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 log = logging.getLogger(__name__)
@@ -31,6 +31,15 @@ class AuthDB:
             return
         engine_kw.setdefault("pool_pre_ping", True)
         self._engine = create_engine(db_uri, **engine_kw)
+
+        @event.listens_for(self._engine, "connect")
+        def _set_sqlite_pragma(dbapi_conn, connection_record):
+            cursor = dbapi_conn.cursor()
+            cursor.execute("PRAGMA journal_mode=WAL")
+            cursor.execute("PRAGMA foreign_keys=ON")
+            cursor.execute("PRAGMA busy_timeout=5000")
+            cursor.close()
+
         self._session_factory = sessionmaker(bind=self._engine)
         log.info("Auth DB engine initialised: %s", db_uri)
 

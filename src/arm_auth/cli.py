@@ -12,8 +12,6 @@ from arm_auth.db import AuthDB
 from arm_auth.service import AuthService
 from arm_auth.tinyauth.sync import sync_users
 
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
-
 
 def _get_db(db_path: str) -> AuthDB:
     """Create and initialize an AuthDB instance."""
@@ -25,7 +23,7 @@ def _get_db(db_path: str) -> AuthDB:
 @click.group()
 def main():
     """ARM Auth — manage authentication for the ARM ecosystem."""
-    pass
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
 
 @main.command()
@@ -42,8 +40,11 @@ def init(db_path: str, admin_password: str, users_file: str):
     try:
         svc.create_user("admin", admin_password, group_name="admin")
         click.echo(f"Initialized auth DB at {db_path} with admin user")
-    except ValueError:
-        click.echo(f"Admin user already exists — skipping (DB at {db_path})")
+    except ValueError as e:
+        if "already exists" in str(e):
+            click.echo(f"Admin user already exists — skipping (DB at {db_path})")
+        else:
+            raise click.ClickException(str(e))
 
     sync_users(db, users_file)
     db.dispose()

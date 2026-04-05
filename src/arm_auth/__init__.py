@@ -1,8 +1,13 @@
 """Shared authentication library for the ARM ecosystem."""
 
-from pathlib import Path
+from importlib.metadata import version, PackageNotFoundError
 
-__version__ = (Path(__file__).resolve().parent.parent.parent / "VERSION").read_text().strip()
+try:
+    __version__ = version("arm-auth")
+except PackageNotFoundError:
+    # Fallback for development (editable install may not have metadata)
+    from pathlib import Path
+    __version__ = (Path(__file__).resolve().parent.parent.parent / "VERSION").read_text().strip()
 
 from arm_auth.db import AuthDB, auth_db
 from arm_auth.models import User, Group

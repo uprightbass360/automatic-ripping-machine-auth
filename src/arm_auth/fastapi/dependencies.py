@@ -18,6 +18,16 @@ from arm_auth.models import User
 logger = logging.getLogger(__name__)
 
 
+def _detach_user(session, user: User) -> User:
+    """Eagerly load groups and detach user from session."""
+    _ = [(g.id, g.name, g.scopes) for g in user.groups]
+    session.expunge(user)
+    for g in user.groups:
+        session.expunge(g)
+    make_transient(user)
+    return user
+
+
 @dataclass
 class SyntheticUser:
     """Fake user returned when auth is disabled."""
@@ -52,20 +62,15 @@ class AuthDependencies:
             if not enabled:
                 return SyntheticUser()
 
-            remote_user = request.headers.get("Remote-User")
-            if not remote_user:
+            remote_user = request.headers.get("Remote-User", "").strip()
+            if not remote_user or len(remote_user) > 150 or "\n" in remote_user or "\x00" in remote_user:
                 raise HTTPException(status_code=401, detail="Not authenticated")
 
             with db.session() as s:
                 user = s.query(User).filter_by(username=remote_user, active=True).first()
                 if user is None:
                     raise HTTPException(status_code=401, detail="User not found or inactive")
-                _ = [(g.name, g.scopes) for g in user.groups]
-                s.expunge(user)
-                for g in user.groups:
-                    s.expunge(g)
-                make_transient(user)
-                return user
+                return _detach_user(s, user)
 
         return Depends(_get_current_user)
 
@@ -78,8 +83,8 @@ class AuthDependencies:
             if not enabled:
                 return SyntheticUser()
 
-            remote_user = request.headers.get("Remote-User")
-            if not remote_user:
+            remote_user = request.headers.get("Remote-User", "").strip()
+            if not remote_user or len(remote_user) > 150 or "\n" in remote_user or "\x00" in remote_user:
                 raise HTTPException(status_code=401, detail="Not authenticated")
 
             with db.session() as s:
@@ -88,10 +93,7 @@ class AuthDependencies:
                     raise HTTPException(status_code=401, detail="User not found or inactive")
                 _ = [(g.name, g.scopes) for g in user.groups]
                 has_scope = user.has_scope(scope)
-                s.expunge(user)
-                for g in user.groups:
-                    s.expunge(g)
-                make_transient(user)
+                _detach_user(s, user)
                 if not has_scope:
                     raise HTTPException(status_code=403, detail=f"Insufficient permissions: requires '{scope}'")
                 return user

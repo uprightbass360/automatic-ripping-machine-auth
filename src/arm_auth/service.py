@@ -13,12 +13,24 @@ from arm_auth.scopes import DEFAULT_GROUPS
 
 logger = logging.getLogger(__name__)
 
+# Pre-computed dummy hash for constant-time username enumeration prevention
+_DUMMY_HASH = "$2b$12$LJ3m4ys3Lf0j5UJB.WhO0OTpcjzOmRKHSO1x2VgNJHbWMiGMgwKy"
+
 
 class AuthService:
     """High-level operations for managing auth users and groups."""
 
     def __init__(self, db: AuthDB):
         self.db = db
+
+    def _detach_user(self, session, user: User) -> User:
+        """Eagerly load groups and detach user from session."""
+        _ = [(g.id, g.name, g.scopes) for g in user.groups]
+        session.expunge(user)
+        for g in user.groups:
+            session.expunge(g)
+        make_transient(user)
+        return user
 
     def seed_defaults(self):
         """Create default groups if they don't exist."""
@@ -57,23 +69,14 @@ class AuthService:
             s.flush()
             # Force-load all attributes and relationships before session closes
             s.refresh(user)
-            _ = [(g.id, g.name, g.scopes) for g in user.groups]
-            s.expunge(user)
-            for g in user.groups:
-                s.expunge(g)
-            make_transient(user)
-            return user
+            return self._detach_user(s, user)
 
     def list_users(self) -> list[User]:
         """Return all users with their groups loaded."""
         with self.db.session() as s:
             users = s.query(User).all()
             for u in users:
-                _ = [(g.id, g.name, g.scopes) for g in u.groups]
-                s.expunge(u)
-                for g in u.groups:
-                    s.expunge(g)
-                make_transient(u)
+                self._detach_user(s, u)
             return users
 
     def get_user(self, username: str) -> Optional[User]:
@@ -81,11 +84,7 @@ class AuthService:
         with self.db.session() as s:
             user = s.query(User).filter_by(username=username).first()
             if user is not None:
-                _ = [(g.id, g.name, g.scopes) for g in user.groups]
-                s.expunge(user)
-                for g in user.groups:
-                    s.expunge(g)
-                make_transient(user)
+                self._detach_user(s, user)
             return user
 
     def update_user(
@@ -112,12 +111,7 @@ class AuthService:
                 user.groups.append(group)
             s.flush()
             s.refresh(user)
-            _ = [(g.id, g.name, g.scopes) for g in user.groups]
-            s.expunge(user)
-            for g in user.groups:
-                s.expunge(g)
-            make_transient(user)
-            return user
+            return self._detach_user(s, user)
 
     def update_password(self, user_id: int, new_password: str):
         """Change a user's password."""
@@ -146,12 +140,8 @@ class AuthService:
         with self.db.session() as s:
             user = s.query(User).filter_by(username=username, active=True).first()
             if user is None:
+                verify_password("dummy", _DUMMY_HASH)
                 return None
             if not verify_password(password, user.password_hash):
                 return None
-            _ = [(g.id, g.name, g.scopes) for g in user.groups]
-            s.expunge(user)
-            for g in user.groups:
-                s.expunge(g)
-            make_transient(user)
-            return user
+            return self._detach_user(s, user)
